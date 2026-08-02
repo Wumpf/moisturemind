@@ -124,6 +124,24 @@ async fn setup_ble_advertising(sd: &'static Softdevice) {
     config.secondary_phy = ble::Phy::M2;
     // TODO: tweak power config?
 
+    let moisture = 42_u16.to_le_bytes(); // TODO: advertise actual sensor data here.
+
+    // See https://bthome.io/format/
+    const BTHOME_UUID: [u8; 2] = 0xFCD2_u16.to_le_bytes(); // 0xFCD2 BTHome service UUID (sponsored by Allterco Robotics)
+    const BTHOME_FLAGS: u8 = (0 << 0) + // No encryption.
+                             (0 << 2) + // Not a trigger based device.
+                             (2 << 5); // BTHome version 2.0
+    const BTHOME_MOISTURE16: u8 = 0x14; // BTHome moisture sensor type, 16bit value.
+
+    let bthome_service_data = [
+        BTHOME_UUID[0],
+        BTHOME_UUID[1],
+        BTHOME_FLAGS,
+        BTHOME_MOISTURE16,
+        moisture[0],
+        moisture[1],
+    ];
+
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
     // ("legacy" just means we have the older 31 byte advertisment package)
     let advertisement_data = ble::advertisement_builder::LegacyAdvertisementBuilder::new()
@@ -144,6 +162,10 @@ async fn setup_ble_advertising(sd: &'static Softdevice) {
             // Let's be nice and set an appearance value.
             ble::advertisement_builder::AdvertisementDataType::APPEARANCE,
             &0x0540_u16.to_le_bytes(), // Appearance flag for Generic Sensor (see https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf)
+        )
+        .raw(
+            ble::advertisement_builder::AdvertisementDataType::SERVICE_DATA_16,
+            &bthome_service_data,
         )
         .full_name("Moisturemind")
         .build();
