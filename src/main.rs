@@ -1,21 +1,19 @@
 #![no_std]
 #![no_main]
 
+mod usb;
+
 use embassy_executor::Spawner;
 use embassy_nrf::{
     bind_interrupts, gpio,
     interrupt::{self, typelevel::Interrupt as _},
     peripherals,
-    usb::{self},
 };
-use embassy_usb::class::cdc_acm::CdcAcmClass;
-use embassy_usb::{UsbDevice, driver::EndpointError};
 use nrf_softdevice::{Softdevice, ble};
-use static_cell::StaticCell;
 
 bind_interrupts!(
-    struct Irqs {
-        USBD => usb::InterruptHandler<peripherals::USBD>;
+    pub struct Irqs {
+        USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     }
 );
 
@@ -24,10 +22,8 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     reset_into_dfu();
 }
 
-const USB_PACKAGE_SIZE: usize = 64;
-
 /// Resets the device into Device Firmware Update mode (DFU).
-fn reset_into_dfu() -> ! {
+pub fn reset_into_dfu() -> ! {
     // Via https://github.com/adafruit/Adafruit_nRF52_Bootloader#how-to-use
     // This should allow us to reset into DFU/serial bootloader mode after reset.
 
@@ -48,12 +44,10 @@ fn reset_into_dfu() -> ! {
     cortex_m::peripheral::SCB::sys_reset();
 }
 
-type UsbDriver = usb::Driver<'static, &'static usb::vbus_detect::SoftwareVbusDetect>;
-
 #[embassy_executor::task]
 async fn softdevice_task(
     sd: &'static Softdevice,
-    vbus: &'static usb::vbus_detect::SoftwareVbusDetect,
+    vbus: &'static embassy_nrf::usb::vbus_detect::SoftwareVbusDetect,
 ) -> ! {
     sd.run_with_callback(|event| {
         use nrf_softdevice::SocEvent;
@@ -67,20 +61,6 @@ async fn softdevice_task(
         }
     })
     .await
-}
-
-#[embassy_executor::task]
-async fn usb_task(mut device: UsbDevice<'static, UsbDriver>) -> ! {
-    device.run().await;
-}
-
-#[embassy_executor::task]
-async fn usb_read_write_task(mut class: CdcAcmClass<'static, UsbDriver>) -> ! {
-    // Reconnect if we loose connection.
-    loop {
-        class.wait_connection().await;
-        let _ = echo_and_reset_on_r(&mut class).await;
-    }
 }
 
 #[embassy_executor::task]
@@ -102,36 +82,6 @@ async fn blink_task(
     }
 }
 
-struct Disconnected {}
-
-impl From<EndpointError> for Disconnected {
-    fn from(val: EndpointError) -> Self {
-        match val {
-            EndpointError::BufferOverflow => panic!("Buffer overflow"),
-            EndpointError::Disabled => Disconnected {},
-        }
-    }
-}
-
-async fn echo_and_reset_on_r(
-    class: &mut CdcAcmClass<'static, UsbDriver>,
-) -> Result<(), Disconnected> {
-    let mut buf = [0; USB_PACKAGE_SIZE];
-    loop {
-        let n = class.read_packet(&mut buf).await?;
-        let data = &buf[..n];
-        class.write_packet(data).await?;
-
-        if data.contains(&b'r') {
-            class.write_packet(b"\nresetting...").await?;
-            // There doesn't seem to be a reliable way to ensure that the packet arrived.
-            cortex_m::asm::delay(6_400_000); // ~100ms at 64 MHz
-
-            reset_into_dfu();
-        }
-    }
-}
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // Per https://github.com/embassy-rs/nrf-softdevice/tree/nrf-softdevice-v0.1.0#interrupt-priority
@@ -145,7 +95,7 @@ async fn main(spawner: Spawner) {
     let config = softdevice_config();
     let sd = Softdevice::enable(&config);
 
-    let vbus = setup_usb(&spawner, peripherals.USBD);
+    let vbus = usb::setup_usb(&spawner, peripherals.USBD);
     spawner.spawn(softdevice_task(sd, vbus).unwrap());
 
     setup_blinking_leds(
@@ -189,68 +139,6 @@ async fn setup_ble_advertising(sd: &'static Softdevice) {
     };
 
     ble::peripheral::advertise(sd, adv, &config).await.unwrap();
-}
-
-fn setup_usb(
-    spawner: &Spawner,
-    usbd: embassy_nrf::Peri<'static, peripherals::USBD>,
-) -> &'static usb::vbus_detect::SoftwareVbusDetect {
-    // Enable USB events on softdevice.
-    unsafe {
-        nrf_softdevice::raw::sd_power_usbdetected_enable(1);
-        nrf_softdevice::raw::sd_power_usbremoved_enable(1);
-        nrf_softdevice::raw::sd_power_usbpwrrdy_enable(1);
-    };
-
-    // Create the driver.
-    // We can't use usb::vbus_detect::HardwareVbusDetect with SoftDevice, so we have to feed in status ourselves.
-    // This happens as part of the `softdevice_task` callback, which is called on USB events.
-    let mut usbregstatus: u32 = 0;
-    unsafe {
-        nrf_softdevice::raw::sd_power_usbregstatus_get(&mut usbregstatus);
-    }
-    let usb_detected = (usbregstatus & 1) != 0;
-    let power_ready = (usbregstatus & (1 << 1)) != 0;
-    static VBUS: StaticCell<usb::vbus_detect::SoftwareVbusDetect> = StaticCell::new();
-    let vbus = &*VBUS.init(usb::vbus_detect::SoftwareVbusDetect::new(
-        usb_detected,
-        power_ready,
-    ));
-
-    let driver = usb::Driver::new(usbd, Irqs, vbus);
-
-    // Create embassy-usb Config
-    let mut config = embassy_usb::Config::new(0xc0de, 0xcafe);
-    config.manufacturer = Some("Wumpftech");
-    config.product = Some("Wumpftech Serial");
-    config.serial_number = Some("wumpf1");
-    config.max_packet_size_0 = USB_PACKAGE_SIZE as u8;
-
-    // Create embassy-usb DeviceBuilder using the driver and config.
-    static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
-    static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
-    static MSOS_DESC: StaticCell<[u8; 128]> = StaticCell::new();
-    static CONTROL_BUF: StaticCell<[u8; 128]> = StaticCell::new();
-    let mut builder = embassy_usb::Builder::new(
-        driver,
-        config,
-        &mut CONFIG_DESC.init([0; 256])[..],
-        &mut BOS_DESC.init([0; 256])[..],
-        &mut MSOS_DESC.init([0; 128])[..],
-        &mut CONTROL_BUF.init([0; 128])[..],
-    );
-
-    // Create classes on the builder.
-    static STATE: StaticCell<embassy_usb::class::cdc_acm::State> = StaticCell::new();
-    let state = STATE.init(embassy_usb::class::cdc_acm::State::new());
-    let class = embassy_usb::class::cdc_acm::CdcAcmClass::new(&mut builder, state, 64);
-
-    let device = builder.build();
-
-    spawner.spawn(usb_task(device).unwrap());
-    spawner.spawn(usb_read_write_task(class).unwrap());
-
-    vbus
 }
 
 fn setup_blinking_leds(
