@@ -1,4 +1,4 @@
-The Moistermind
+The Moisturemind
 ======================
 
 (Seeed Studio XIAO) nRF52840 + capacitive moisture detector for plants + some Rust code (this repo) == The Moistermind!

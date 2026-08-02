@@ -2,7 +2,7 @@
 set -e
 
 COM_PORT=/dev/cu.usbmodem1101
-CRATE=moistermind
+CRATE=moisturemind
 
 cargo build -p $CRATE --release
 arm-none-eabi-objcopy -O ihex target/thumbv7em-none-eabihf/release/$CRATE target/$CRATE.hex
