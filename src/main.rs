@@ -109,33 +109,53 @@ async fn main(spawner: Spawner) {
 }
 
 async fn setup_ble_advertising(sd: &'static Softdevice) {
+    // Our custom service UUID `d805d254-01f2-42c2-ab6c-798366bf1a4d` in little endian.
+    // Disabled, see below why.
+    // const SERVICE_UUID: [u8; 16] = [
+    //     0x4d, 0x1a, 0xbf, 0x66, 0x83, 0x79, 0x6c, 0xab, 0xc2, 0x42, 0xf2, 0x01, 0x54, 0xd2, 0x05,
+    //     0xd8,
+    // ];
+
     let mut config = ble::peripheral::Config::default();
-    config.interval = 50; // Advertising interval in 0.625us units.
+    config.interval = 160; // 100ms (Advertising interval in 0.625ms units - doc has a bug.)
+    config.primary_phy = ble::Phy::M1;
+    // Enable BLE5 2Mbit connection - this should end up using less battery since racing to sleep radio usually uses least power.
+    // Practically my Android BLE scanner app reports no secondary phy used though.
+    config.secondary_phy = ble::Phy::M2;
+    // TODO: tweak power config?
 
-    // Legacy means it's BLE 4.x compatible.
-    static ADV_DATA: ble::advertisement_builder::LegacyAdvertisementPayload =
-        ble::advertisement_builder::LegacyAdvertisementBuilder::new()
-            .flags(&[
-                ble::advertisement_builder::Flag::GeneralDiscovery,
-                ble::advertisement_builder::Flag::LE_Only,
-            ])
-            .services_16(
-                ble::advertisement_builder::ServiceList::Complete,
-                // if there were a lot of these there may not be room for the full name
-                &[ble::advertisement_builder::ServiceUuid16::HEALTH_THERMOMETER],
-            )
-            .short_name("hello")
-            .build();
+    // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
+    // ("legacy" just means we have the older 31 byte advertisment package)
+    let advertisement_data = ble::advertisement_builder::LegacyAdvertisementBuilder::new()
+        .flags(&[
+            // TODO: Using `LimitedDiscovery` would make sense. Llm says we have to set a timeout for this!
+            ble::advertisement_builder::Flag::GeneralDiscovery,
+            // Tell everyone we're only supporting BLE, not classic Bluetooth.
+            ble::advertisement_builder::Flag::LE_Only,
+        ])
+        // 16bit service IDs are used for standard services.
+        // Our device doesn't fit any in particular, so we should set a 128bit custom service ID instead.
+        // However, it gets a bit hard to squeeze this into the 31 advertisment package
+        // .services_128(
+        //     ble::advertisement_builder::ServiceList::Complete,
+        //     &[SERVICE_UUID],
+        // )
+        .raw(
+            // Let's be nice and set an appearance value.
+            ble::advertisement_builder::AdvertisementDataType::APPEARANCE,
+            &0x0540_u16.to_le_bytes(), // Appearance flag for Generic Sensor (see https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf)
+        )
+        .full_name("Moisturemind")
+        .build();
 
-    // Full name is visible once connected.
-    static SCAN_DATA: ble::advertisement_builder::LegacyAdvertisementPayload =
-        ble::advertisement_builder::LegacyAdvertisementBuilder::new()
-            .full_name("Wumpf says hi with more words")
-            .build();
-
-    let adv = ble::peripheral::NonconnectableAdvertisement::ScannableUndirected {
-        adv_data: &ADV_DATA,
-        scan_data: &SCAN_DATA,
+    // Not doing allowing any scanning, everywhing we have to say is in the advertisement.
+    // let adv = ble::peripheral::NonconnectableAdvertisement::ExtendedNonscannableUndirected {
+    //     set_id: 0,
+    //     anonymous: false,
+    //     adv_data: &advertisement_data,
+    // };
+    let adv = ble::peripheral::NonconnectableAdvertisement::NonscannableUndirected {
+        adv_data: &advertisement_data,
     };
 
     ble::peripheral::advertise(sd, adv, &config).await.unwrap();
@@ -156,44 +176,42 @@ fn setup_blinking_leds(
 fn softdevice_config() -> nrf_softdevice::Config {
     use nrf_softdevice::raw;
 
-    let name = b"BlueWumpf";
+    const NAME: &[u8] = b"Moisturemind";
 
     nrf_softdevice::Config {
+        // What clock the softdevice should use.
         clock: Some(raw::nrf_clock_lf_cfg_t {
             source: raw::NRF_CLOCK_LF_SRC_RC as u8, // TODO: switch to external? NRF_CLOCK_LF_SRC_XTAL?
             rc_ctiv: 16,
             rc_temp_ctiv: 2,
             accuracy: raw::NRF_CLOCK_LF_ACCURACY_500_PPM as u8,
         }),
-        // Configure GAP (Generic Access Profile) connection resource.
-        conn_gap: Some(raw::ble_gap_conn_cfg_t {
-            conn_count: 6,
-            event_length: 24,
-        }),
-        // Configure GATT (Generic Attribute Profile) connection resource.
-        conn_gatt: Some(raw::ble_gatt_conn_cfg_t { att_mtu: 256 }), // Bumps up the maximum transmission unit, allowing us to send more data in one packet.
-        // Attribute table size.
-        gatts_attr_tab_size: Some(raw::ble_gatts_cfg_attr_tab_size_t {
-            attr_tab_size: raw::BLE_GATTS_ATTR_TAB_SIZE_DEFAULT,
-        }),
+
         // Configure BLE roles.
         gap_role_count: Some(raw::ble_gap_cfg_role_count_t {
             adv_set_count: 1,
-            periph_role_count: 3,  //raw::BLE_GAP_ROLE_COUNT_PERIPH_DEFAULT as _,
-            central_role_count: 3, //raw::BLE_GAP_ROLE_COUNT_CENTRAL_DEFAULT as _,
-            central_sec_count: 0,  //raw::BLE_GAP_ROLE_COUNT_CENTRAL_SEC_DEFAULT as _,
+            periph_role_count: 0, // Disable connections as a pheripheral. Default is 1 (raw::BLE_GAP_ROLE_COUNT_PERIPH_DEFAULT)
+            central_role_count: 0, // Disable connections as a central (we're only advertising). Default is 3 (raw::BLE_GAP_ROLE_COUNT_CENTRAL_DEFAULT),
+            central_sec_count: 0, // Disable concurrent central-role security negotiations. Default is 1 (raw::BLE_GAP_ROLE_COUNT_CENTRAL_SEC_DEFAULT),
             _bitfield_1: raw::ble_gap_cfg_role_count_t::new_bitfield_1(0),
         }),
+
         // Configure GAP (Generic Access Profile) device name.
         gap_device_name: Some(raw::ble_gap_cfg_device_name_t {
-            p_value: name.as_ptr() as *const u8 as _,
-            current_len: name.len() as _,
-            max_len: name.len() as _,
+            p_value: NAME.as_ptr() as *const u8 as _,
+            current_len: NAME.len() as _,
+            max_len: NAME.len() as _,
             write_perm: unsafe { core::mem::zeroed() }, // Not writable.
             _bitfield_1: raw::ble_gap_cfg_device_name_t::new_bitfield_1(
                 raw::BLE_GATTS_VLOC_STACK as u8,
             ),
         }),
+
+        // Configure uuid count.
+        common_vs_uuid: Some(raw::ble_common_cfg_vs_uuid_t {
+            vs_uuid_count: 1, // We have one custom service UUID.
+        }),
+
         ..Default::default()
     }
 }
