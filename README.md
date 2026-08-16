@@ -1,7 +1,7 @@
 The Moisturemind
 ======================
 
-(Seeed Studio XIAO) nRF52840 + capacitive moisture detector for plants + some Rust code (this repo) == The Moistermind!
+(Seeed Studio XIAO) nRF52840 + [capacitive moisture detector](https://thepihut.com/products/capacitive-soil-moisture-sensor) for plants + some Rust code (this repo) == The Moistermind!
 
 For my first stumbling steps in getting anything out of the Seeed Studio XIAO nRF52840 and how see https://github.com/Wumpf/Seeed-nRF52840-Sense-projects
 Some things are directly copied out of that project.
@@ -27,3 +27,11 @@ need to change `COM_PORT` to the correct port your device is connected on.
 Easiest way to figure it out on Mac is to run `ls /dev/cu.*`
 
 If your SoftDevice setting is different you'll need to adjust the `sd-req` parameter as well, see below.
+
+
+Connecting
+--------------------
+[Pinout of the Seeed Studio XIAO nRF52840](https://wiki.seeedstudio.com/XIAO_BLE/#hardware-overview)
+
+The [moisture detector](https://thepihut.com/products/capacitive-soil-moisture-sensor) I picked uses 3.3V, so we're using this directly off the MCU board.
+The output is an analog signal, so any of the ADC inputs should do - fist pin is the P0.02, so I'm going with that.

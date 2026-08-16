@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+mod ble_advertiser;
+mod moisture_sampling;
 mod usb;
 
 use embassy_executor::Spawner;
@@ -9,11 +11,12 @@ use embassy_nrf::{
     interrupt::{self, typelevel::Interrupt as _},
     peripherals,
 };
-use nrf_softdevice::{Softdevice, ble};
+use nrf_softdevice::Softdevice;
 
 bind_interrupts!(
     pub struct Irqs {
         USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
+        SAADC => embassy_nrf::saadc::InterruptHandler;
     }
 );
 
@@ -73,12 +76,12 @@ async fn blink_task(
         led_red.set_high();
         led_green.set_high();
         led_blue.set_high();
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+        embassy_time::Timer::after_millis(500).await;
 
         led_red.set_low();
         led_green.set_low();
         led_blue.set_low();
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+        embassy_time::Timer::after_millis(500).await;
     }
 }
 
@@ -98,6 +101,9 @@ async fn main(spawner: Spawner) {
     let vbus = usb::setup_usb(&spawner, peripherals.USBD);
     spawner.spawn(softdevice_task(sd, vbus).unwrap());
 
+    moisture_sampling::setup_moisture_sampling(&spawner, peripherals.SAADC, peripherals.P0_02)
+        .await;
+
     setup_blinking_leds(
         &spawner,
         peripherals.P0_26,
@@ -105,82 +111,7 @@ async fn main(spawner: Spawner) {
         peripherals.P0_06,
     );
 
-    setup_ble_advertising(sd).await;
-}
-
-async fn setup_ble_advertising(sd: &'static Softdevice) {
-    // Our custom service UUID `d805d254-01f2-42c2-ab6c-798366bf1a4d` in little endian.
-    // Disabled, see below why.
-    // const SERVICE_UUID: [u8; 16] = [
-    //     0x4d, 0x1a, 0xbf, 0x66, 0x83, 0x79, 0x6c, 0xab, 0xc2, 0x42, 0xf2, 0x01, 0x54, 0xd2, 0x05,
-    //     0xd8,
-    // ];
-
-    let mut config = ble::peripheral::Config::default();
-    config.interval = 160; // 100ms (Advertising interval in 0.625ms units - doc has a bug.)
-    config.primary_phy = ble::Phy::M1;
-    // Enable BLE5 2Mbit connection - this should end up using less battery since racing to sleep radio usually uses least power.
-    // Practically my Android BLE scanner app reports no secondary phy used though.
-    config.secondary_phy = ble::Phy::M2;
-    // TODO: tweak power config?
-
-    let moisture = 42_u16.to_le_bytes(); // TODO: advertise actual sensor data here.
-
-    // See https://bthome.io/format/
-    const BTHOME_UUID: [u8; 2] = 0xFCD2_u16.to_le_bytes(); // 0xFCD2 BTHome service UUID (sponsored by Allterco Robotics)
-    const BTHOME_FLAGS: u8 = (0 << 0) + // No encryption.
-                             (0 << 2) + // Not a trigger based device.
-                             (2 << 5); // BTHome version 2.0
-    const BTHOME_MOISTURE16: u8 = 0x14; // BTHome moisture sensor type, 16bit value.
-
-    let bthome_service_data = [
-        BTHOME_UUID[0],
-        BTHOME_UUID[1],
-        BTHOME_FLAGS,
-        BTHOME_MOISTURE16,
-        moisture[0],
-        moisture[1],
-    ];
-
-    // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
-    // ("legacy" just means we have the older 31 byte advertisment package)
-    let advertisement_data = ble::advertisement_builder::LegacyAdvertisementBuilder::new()
-        .flags(&[
-            // TODO: Using `LimitedDiscovery` would make sense. Llm says we have to set a timeout for this!
-            ble::advertisement_builder::Flag::GeneralDiscovery,
-            // Tell everyone we're only supporting BLE, not classic Bluetooth.
-            ble::advertisement_builder::Flag::LE_Only,
-        ])
-        // 16bit service IDs are used for standard services.
-        // Our device doesn't fit any in particular, so we should set a 128bit custom service ID instead.
-        // However, it gets a bit hard to squeeze this into the 31 advertisment package
-        // .services_128(
-        //     ble::advertisement_builder::ServiceList::Complete,
-        //     &[SERVICE_UUID],
-        // )
-        .raw(
-            // Let's be nice and set an appearance value.
-            ble::advertisement_builder::AdvertisementDataType::APPEARANCE,
-            &0x0540_u16.to_le_bytes(), // Appearance flag for Generic Sensor (see https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf)
-        )
-        .raw(
-            ble::advertisement_builder::AdvertisementDataType::SERVICE_DATA_16,
-            &bthome_service_data,
-        )
-        .full_name("Moisturemind")
-        .build();
-
-    // Not doing allowing any scanning, everywhing we have to say is in the advertisement.
-    // let adv = ble::peripheral::NonconnectableAdvertisement::ExtendedNonscannableUndirected {
-    //     set_id: 0,
-    //     anonymous: false,
-    //     adv_data: &advertisement_data,
-    // };
-    let adv = ble::peripheral::NonconnectableAdvertisement::NonscannableUndirected {
-        adv_data: &advertisement_data,
-    };
-
-    ble::peripheral::advertise(sd, adv, &config).await.unwrap();
+    ble_advertiser::setup_ble_advertising(spawner, sd).await;
 }
 
 fn setup_blinking_leds(

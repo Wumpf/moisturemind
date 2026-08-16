@@ -10,13 +10,13 @@ cortex-m = { version = "0.7.7", features = [
     "inline-asm",
 ] }
 cortex-m-rt = "0.7.5"
-nrf-softdevice = { version = "0.1.0", features = [
+nrf-softdevice = { git = "https://github.com/embassy-rs/nrf-softdevice", features = [
     "ble-peripheral",
     "ble-central",
     "nrf52840",
     "s140",
     "critical-section-impl",
-] }
+] } # Need to use git version due to linker errors, see https://github.com/embassy-rs/nrf-softdevice/issues/304
 static_cell = "2"
 
 embassy-executor = { version = "0.10.0", features = [
