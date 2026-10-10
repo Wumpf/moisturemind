@@ -22,16 +22,28 @@ async fn sample_moisture(mut saadc: saadc::Saadc<'static, 1>) -> ! {
     const WET: i64 = 1200;
 
     loop {
-        let mut new_value = [0_i16];
-        saadc.sample(&mut new_value).await;
+        // Take 11 samples spaced apart by 10 milliseconds.
+        let mut samples = [0_i16; 11];
+        for index in 0..samples.len() {
+            if index > 0 {
+                embassy_time::Timer::after_millis(10).await;
+            }
+            let mut new_value = [0_i16];
+            saadc.sample(&mut new_value).await;
+            samples[index] = new_value[0];
+        }
 
-        let mut cleaned_value = (new_value[0] as i64).clamp(WET, DRY);
+        // Use the median of those samples as the new value.
+        samples.sort_unstable();
+        let median = samples[samples.len() / 2] as i64;
+        let mut cleaned_value = median.clamp(WET, DRY);
         cleaned_value = (100 * (DRY - cleaned_value)) / (DRY - WET); // Scale to 0-100 range
         cleaned_value = cleaned_value.clamp(0, 100); // Clamp to 0-100 range just in case.
 
         LAST_SAMPLED_MOISTURE.store(cleaned_value as u8, core::sync::atomic::Ordering::Relaxed);
 
-        embassy_time::Timer::after_millis(100).await; // TODO: moisture doesn't change that often ;-)
+        // Wait for 5 minutes before taking the next set of samples.
+        embassy_time::Timer::after_secs(5 * 60).await;
     }
 }
 
