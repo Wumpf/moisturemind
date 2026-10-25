@@ -1,13 +1,16 @@
 #![no_std]
 #![no_main]
 
+mod battery_led;
+mod battery_sampling;
 mod ble_advertiser;
+mod data_sampling;
 mod moisture_sampling;
 mod usb;
 
 use embassy_executor::Spawner;
 use embassy_nrf::{
-    bind_interrupts, gpio,
+    bind_interrupts,
     interrupt::{self, typelevel::Interrupt as _},
     peripherals,
 };
@@ -66,25 +69,6 @@ async fn softdevice_task(
     .await
 }
 
-#[embassy_executor::task]
-async fn blink_task(
-    mut led_red: gpio::Output<'static>,
-    mut led_green: gpio::Output<'static>,
-    mut led_blue: gpio::Output<'static>,
-) -> ! {
-    loop {
-        led_red.set_high();
-        led_green.set_high();
-        led_blue.set_high();
-        embassy_time::Timer::after_millis(500).await;
-
-        led_red.set_low();
-        led_green.set_low();
-        led_blue.set_low();
-        embassy_time::Timer::after_millis(500).await;
-    }
-}
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // Per https://github.com/embassy-rs/nrf-softdevice/tree/nrf-softdevice-v0.1.0#interrupt-priority
@@ -101,29 +85,25 @@ async fn main(spawner: Spawner) {
     let vbus = usb::setup_usb(&spawner, peripherals.USBD);
     spawner.spawn(softdevice_task(sd, vbus).unwrap());
 
-    moisture_sampling::setup_moisture_sampling(&spawner, peripherals.SAADC, peripherals.P0_02)
-        .await;
-
-    setup_blinking_leds(
+    data_sampling::setup_data_sampling(
         &spawner,
+        peripherals.SAADC,
+        peripherals.P0_02,
+        peripherals.P0_14,
+        peripherals.P0_17,
+        peripherals.P0_31,
+    )
+    .await;
+
+    battery_led::setup_battery_led(
+        &spawner,
+        peripherals.PWM0,
         peripherals.P0_26,
         peripherals.P0_30,
         peripherals.P0_06,
     );
 
     ble_advertiser::setup_ble_advertising(spawner, sd).await;
-}
-
-fn setup_blinking_leds(
-    spawner: &Spawner,
-    red: embassy_nrf::Peri<'static, impl gpio::Pin>,
-    green: embassy_nrf::Peri<'static, impl gpio::Pin>,
-    blue: embassy_nrf::Peri<'static, impl gpio::Pin>,
-) {
-    let led_red = gpio::Output::new(red, gpio::Level::Low, gpio::OutputDrive::Standard);
-    let led_green = gpio::Output::new(green, gpio::Level::Low, gpio::OutputDrive::Standard);
-    let led_blue = gpio::Output::new(blue, gpio::Level::Low, gpio::OutputDrive::Standard);
-    spawner.spawn(blink_task(led_red, led_green, led_blue).unwrap());
 }
 
 fn softdevice_config() -> nrf_softdevice::Config {

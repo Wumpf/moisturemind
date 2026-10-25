@@ -741,6 +741,7 @@ dependencies = [
  "cortex-m-rt",
  "embassy-executor",
  "embassy-nrf",
+ "embassy-sync",
  "embassy-time",
  "embassy-usb",
  "nrf-softdevice",
