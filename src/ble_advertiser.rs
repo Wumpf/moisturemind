@@ -1,14 +1,15 @@
 use embassy_executor::Spawner;
 use nrf_softdevice::{Softdevice, ble};
 
-use crate::moisture_sampling::LAST_SAMPLED_MOISTURE;
+use crate::{battery_sampling::LAST_SAMPLED_BATTERY_MV, moisture_sampling::LAST_SAMPLED_MOISTURE};
 
+const BTHOME_VOLTAGE_U16: u8 = 0x0C; // Millivolts (BTHome scales by 0.001 V).
 const BTHOME_MOISTURE_U8: u8 = 0x2F;
 const BTHOME_MOISTURE_U16: u8 = 0x14;
 const BTHOME_COUNT_I16: u8 = 0x5A;
 
 #[expect(clippy::identity_op)]
-async fn advertise_moisture(sd: &'static Softdevice, moisture: u8) {
+async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u16) {
     // Our custom service UUID `d805d254-01f2-42c2-ab6c-798366bf1a4d` in little endian.
     // Disabled, see below why.
     // const SERVICE_UUID: [u8; 16] = [
@@ -33,13 +34,33 @@ async fn advertise_moisture(sd: &'static Softdevice, moisture: u8) {
     (0 << 2) + // Not a trigger based device.
     (2 << 5); // BTHome version 2.0
 
-    let bthome_service_data = [
+    let voltage = battery_mv.to_le_bytes();
+
+    // BTHome objects are ordered by ID: voltage (0x0C), then moisture (0x2F).
+    let readings = [
+        BTHOME_UUID[0],
+        BTHOME_UUID[1],
+        BTHOME_FLAGS,
+        BTHOME_VOLTAGE_U16,
+        voltage[0],
+        voltage[1],
+        BTHOME_MOISTURE_U8,
+        moisture,
+    ];
+    let moisture_only = [
         BTHOME_UUID[0],
         BTHOME_UUID[1],
         BTHOME_FLAGS,
         BTHOME_MOISTURE_U8,
         moisture,
     ];
+
+    // Zero means no voltage sample yet; don't advertise it as an empty battery.
+    let bthome_service_data: &[u8] = if battery_mv == 0 {
+        &moisture_only
+    } else {
+        &readings
+    }; // With voltage, the complete legacy advertisement is 30 of 31 bytes.
 
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
     // ("legacy" just means we have the older 31 byte advertisment package)
@@ -64,7 +85,7 @@ async fn advertise_moisture(sd: &'static Softdevice, moisture: u8) {
         )
         .raw(
             ble::advertisement_builder::AdvertisementDataType::SERVICE_DATA_16,
-            &bthome_service_data,
+            bthome_service_data,
         )
         .full_name("Moisturemind")
         .build();
@@ -83,15 +104,16 @@ async fn advertise_moisture(sd: &'static Softdevice, moisture: u8) {
 }
 
 #[embassy_executor::task]
-async fn advertise_moisture_task(sd: &'static Softdevice) -> ! {
+async fn advertise_readings_task(sd: &'static Softdevice) -> ! {
     loop {
         let moisture = LAST_SAMPLED_MOISTURE.load(core::sync::atomic::Ordering::Relaxed);
-        advertise_moisture(sd, moisture).await;
+        let battery_mv = LAST_SAMPLED_BATTERY_MV.load(core::sync::atomic::Ordering::Relaxed);
+        advertise_readings(sd, moisture, battery_mv).await;
 
         embassy_time::Timer::after_millis(50).await;
     }
 }
 
 pub async fn setup_ble_advertising(spawner: Spawner, sd: &'static Softdevice) {
-    spawner.spawn(advertise_moisture_task(sd).unwrap());
+    spawner.spawn(advertise_readings_task(sd).unwrap());
 }
