@@ -34,4 +34,17 @@ Connecting
 [Pinout of the Seeed Studio XIAO nRF52840](https://wiki.seeedstudio.com/XIAO_BLE/#hardware-overview)
 
 The [moisture detector](https://thepihut.com/products/capacitive-soil-moisture-sensor) I picked uses 3.3V, so we're using this directly off the MCU board.
-The output is an analog signal, so any of the ADC inputs should do - fist pin is the P0.02, so I'm going with that.
+The output is an analog signal, so any of the ADC inputs should do - first pin is the P0.02, so I'm going with that.
+
+Current behavior
+--------------------
+* Samples moisture, battery voltage, and charging status every **10 minutes**.
+* Reports moisture and battery voltage to Home Assistant via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling.
+* Battery LED blends from **red (3.0 V)** to **green (4.2 V)**; blue before the first sample.
+
+TODO
+--------------------
+- [ ] Go to deep sleep between samplings.
+- [ ] Investigate whether we need to cut off power to the moisture sensor while not sampling.
+- [ ] Explore having two moisture sensors connected to the same device.
+- [ ] Longer sleep intervals
