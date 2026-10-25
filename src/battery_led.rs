@@ -3,7 +3,7 @@
 use embassy_executor::Spawner;
 use embassy_nrf::{gpio, peripherals, pwm};
 
-use crate::{battery_sampling::LAST_SAMPLED_BATTERY_MV, data_sampling::NEW_DATA_SAMPLED};
+use crate::data_sampling::MEASUREMENTS;
 
 const BATTERY_MIN_MV: u16 = 3000;
 const BATTERY_MAX_MV: u16 = 4200;
@@ -11,15 +11,19 @@ const PWM_MAX_DUTY: u16 = BATTERY_MAX_MV - BATTERY_MIN_MV;
 
 #[embassy_executor::task]
 async fn battery_led_task(mut led: pwm::SimplePwm<'static>) -> ! {
+    let mut receiver = MEASUREMENTS.receiver().unwrap();
+    let mut latest = receiver.try_changed();
+
     loop {
-        let millivolts = LAST_SAMPLED_BATTERY_MV.load(core::sync::atomic::Ordering::Relaxed);
-        let (red, green, blue) = if millivolts == 0 {
-            // No voltage sample yet: show blue, including before the first notification.
-            (0, 0, PWM_MAX_DUTY)
-        } else {
+        let (red, green, blue) = if let Some(data) = latest {
+            let millivolts = data.battery.millivolts;
             let green = millivolts.clamp(BATTERY_MIN_MV, BATTERY_MAX_MV) - BATTERY_MIN_MV;
             (PWM_MAX_DUTY - green, green, 0)
+        } else {
+            // Watch starts empty: show blue until the first published sample.
+            (0, 0, PWM_MAX_DUTY)
         };
+
         // XIAO RGB LEDs are active-low. Normal PWM is LOW for `duty` ticks.
         // Blend red -> yellow -> green once a voltage sample is available.
         led.set_all_duties([
@@ -28,7 +32,8 @@ async fn battery_led_task(mut led: pwm::SimplePwm<'static>) -> ! {
             pwm::DutyCycle::normal(blue),
             pwm::DutyCycle::normal(0),
         ]);
-        NEW_DATA_SAMPLED.wait().await;
+
+        latest = Some(receiver.changed().await);
     }
 }
 

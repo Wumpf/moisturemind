@@ -2,7 +2,7 @@
 
 use embassy_executor::Spawner;
 use embassy_nrf::{Peri, peripherals, saadc};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Watch};
 
 use crate::{Irqs, battery_sampling, moisture_sampling};
 
@@ -12,10 +12,19 @@ const SAMPLE_INTERVAL_MS: u64 = 10;
 /// Delay between completed sampling batches.
 const SAMPLING_INTERVAL_SECS: u64 = 10 * 60;
 
-/// Notification that all sampled values have been updated.
-/// Single consumer (currently the LED task), not a broadcast. Pending notifications
-/// are retained and coalesced; read the latest values from the sampling modules.
-pub static NEW_DATA_SAMPLED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// All readings from one completed sampling cycle.
+#[derive(Clone, Copy, Debug)]
+pub struct Measurements {
+    /// Moisture percentage: 0 (dry) to 100 (wet).
+    pub moisture: u8,
+
+    pub battery: battery_sampling::BatteryReading,
+}
+
+/// Latest complete snapshot, initially empty. Each receiver independently tracks
+/// updates; slow or late receivers get the latest snapshot rather than a queue.
+/// Two receiver slots: one for the LED task and one for BLE advertising.
+pub static MEASUREMENTS: Watch<CriticalSectionRawMutex, Measurements, 2> = Watch::new();
 
 #[embassy_executor::task]
 async fn sample_data(
@@ -41,10 +50,14 @@ async fn sample_data(
             battery_samples[index] = values[1];
         }
 
-        // Publish all readings in this cycle, including the charging-status GPIO.
-        moisture_sampling::record_samples(&mut moisture_samples);
-        battery.record_samples(&mut battery_samples);
-        NEW_DATA_SAMPLED.signal(());
+        let moisture = moisture_sampling::process_samples(&mut moisture_samples);
+        let battery_reading = battery.process_samples(&mut battery_samples);
+
+        // Send latest measurement to all receivers.
+        MEASUREMENTS.sender().send(Measurements {
+            moisture,
+            battery: battery_reading,
+        });
 
         embassy_time::Timer::after_secs(SAMPLING_INTERVAL_SECS).await;
     }

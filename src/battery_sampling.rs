@@ -1,19 +1,17 @@
 //! Samples battery status. See https://wiki.seeedstudio.com/XIAO_BLE/#q3-what-are-the-considerations-when-using-xiao-nrf52840-sense-for-battery-charging
 
 use crate::data_sampling::NUM_ADC_SAMPLES;
-use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use embassy_nrf::{Peri, gpio, peripherals, saadc};
 
-/// Whether the charger was active at the last sample.
-///
-/// False means not charging, not necessarily fully charged: USB power or the battery may be absent.
-/// See https://wiki.seeedstudio.com/XIAO_BLE/#q4-how-does-the-green-light-behave-when-powered-on
-pub static LAST_SAMPLED_CHARGING: AtomicBool = AtomicBool::new(false);
+#[derive(Clone, Copy, Debug)]
+pub struct BatteryReading {
+    /// Terminal voltage, not a reliable battery-presence or charge-percentage indicator.
+    pub millivolts: u16,
 
-/// Battery voltage in millivolts.
-///
-/// If USB is connected, the voltage may be wrong, in particular if there's no battery.
-pub static LAST_SAMPLED_BATTERY_MV: AtomicU16 = AtomicU16::new(0);
+    /// False means not charging, not necessarily full: USB or the battery may be absent.
+    /// See https://wiki.seeedstudio.com/XIAO_BLE/#q4-how-does-the-green-light-behave-when-powered-on
+    pub charging: bool,
+}
 
 /// Keeps the divider enabled and owns the charging-status input for the shared task.
 pub struct BatterySampler {
@@ -22,8 +20,8 @@ pub struct BatterySampler {
 }
 
 impl BatterySampler {
-    /// Publish median battery voltage and current charging status in the same cycle.
-    pub fn record_samples(&self, samples: &mut [i16; NUM_ADC_SAMPLES]) {
+    /// Return median battery voltage and current charging status from the same cycle.
+    pub fn process_samples(&self, samples: &mut [i16; NUM_ADC_SAMPLES]) -> BatteryReading {
         samples.sort_unstable();
         let median_raw = samples[samples.len() / 2].max(0) as u32;
 
@@ -32,10 +30,12 @@ impl BatterySampler {
         // Vbat = Vadc * (1000 + 510) / 510. Round to nearest mV.
         let denominator = 4096 * 510;
         let millivolts = (u64::from(median_raw) * 3600 * 1510 + denominator / 2) / denominator;
-        LAST_SAMPLED_BATTERY_MV.store(millivolts as u16, Ordering::Relaxed);
 
-        // Charging status we can just read off the input pin.
-        LAST_SAMPLED_CHARGING.store(self.charge_status.is_low(), Ordering::Relaxed);
+        BatteryReading {
+            millivolts: millivolts as u16,
+            // Charging status we can just read off the input pin.
+            charging: self.charge_status.is_low(),
+        }
     }
 }
 

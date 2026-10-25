@@ -1,7 +1,9 @@
 use embassy_executor::Spawner;
 use nrf_softdevice::{Softdevice, ble};
 
-use crate::{battery_sampling::LAST_SAMPLED_BATTERY_MV, moisture_sampling::LAST_SAMPLED_MOISTURE};
+use crate::data_sampling::MEASUREMENTS;
+
+const ADVERTISING_DURATION_SECS: u16 = 2;
 
 const BTHOME_VOLTAGE_U16: u8 = 0x0C; // Millivolts (BTHome scales by 0.001 V).
 const BTHOME_MOISTURE_U8: u8 = 0x2F;
@@ -18,8 +20,8 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
     // ];
 
     let config = ble::peripheral::Config {
-        timeout: Some(200), // Advertise the same value for 200ms (units are in 10ms)
-        interval: 160,      // 100ms (Advertising interval in 0.625ms units - doc has a bug.)
+        timeout: Some(ADVERTISING_DURATION_SECS * 100), // Timeout units are 10 ms.
+        interval: 160, // 100ms (Advertising interval in 0.625ms units - doc has a bug.)
 
         // Enable BLE5 2Mbit connection - this should end up using less battery since racing to sleep radio usually uses least power.
         // Practically my Android BLE scanner app reports no secondary phy used though.
@@ -37,7 +39,7 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
     let voltage = battery_mv.to_le_bytes();
 
     // BTHome objects are ordered by ID: voltage (0x0C), then moisture (0x2F).
-    let readings = [
+    let bthome_service_data = [
         BTHOME_UUID[0],
         BTHOME_UUID[1],
         BTHOME_FLAGS,
@@ -47,20 +49,7 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
         BTHOME_MOISTURE_U8,
         moisture,
     ];
-    let moisture_only = [
-        BTHOME_UUID[0],
-        BTHOME_UUID[1],
-        BTHOME_FLAGS,
-        BTHOME_MOISTURE_U8,
-        moisture,
-    ];
-
-    // Zero means no voltage sample yet; don't advertise it as an empty battery.
-    let bthome_service_data: &[u8] = if battery_mv == 0 {
-        &moisture_only
-    } else {
-        &readings
-    }; // With voltage, the complete legacy advertisement is 30 of 31 bytes.
+    // The complete legacy advertisement is 30 of 31 bytes.
 
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
     // ("legacy" just means we have the older 31 byte advertisment package)
@@ -85,7 +74,7 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
         )
         .raw(
             ble::advertisement_builder::AdvertisementDataType::SERVICE_DATA_16,
-            bthome_service_data,
+            &bthome_service_data,
         )
         .full_name("Moisturemind")
         .build();
@@ -105,12 +94,11 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
 
 #[embassy_executor::task]
 async fn advertise_readings_task(sd: &'static Softdevice) -> ! {
+    let mut receiver = MEASUREMENTS.receiver().unwrap();
     loop {
-        let moisture = LAST_SAMPLED_MOISTURE.load(core::sync::atomic::Ordering::Relaxed);
-        let battery_mv = LAST_SAMPLED_BATTERY_MV.load(core::sync::atomic::Ordering::Relaxed);
-        advertise_readings(sd, moisture, battery_mv).await;
-
-        embassy_time::Timer::after_millis(50).await;
+        // No advertising before the first sample or between measurement bursts.
+        let data = receiver.changed().await;
+        advertise_readings(sd, data.moisture, data.battery.millivolts).await;
     }
 }
 
