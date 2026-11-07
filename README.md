@@ -51,6 +51,7 @@ Current behavior
 * P0.03 enables the sensor for a **500 ms warm-up** and the **11-sample batch** (~100 ms), then disables it before advertising and sleeping.
 * Charger status changes wake sampling via a GPIO interrupt (with a 100 ms debounce), triggering a fresh reading and BLE burst.
 * Reports moisture, battery voltage, and charging status to Home Assistant via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling.
+* Omits moisture at **≤3.25 V battery voltage** (measured with the sensor on), where readings were observed to become strange. Battery/charging reports continue
 * Battery LED blends from **red (3.0 V)** to **green (4.2 V)**; blue before the first sample.
 
 TODO

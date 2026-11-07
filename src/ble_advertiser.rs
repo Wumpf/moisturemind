@@ -5,6 +5,10 @@ use crate::data_sampling::MEASUREMENTS;
 
 const ADVERTISING_DURATION_SECS: u16 = 2;
 
+// Observed moisture readings become unreliable around this battery voltage.
+// Use the voltage sampled under sensor load, not a resting/post-advertising value.
+const MOISTURE_CUTOFF_MV: u16 = 3250;
+
 const BTHOME_VOLTAGE_U16: u8 = 0x0C; // Millivolts (BTHome scales by 0.001 V).
 const BTHOME_BATTERY_CHARGING: u8 = 0x16;
 const BTHOME_MOISTURE_U8: u8 = 0x2F;
@@ -55,7 +59,15 @@ async fn advertise_readings(
         BTHOME_MOISTURE_U8,
         moisture,
     ];
-    // Without the optional appearance field, the legacy advertisement is 28 of 31 bytes.
+
+    // Omit the entire moisture object at/below the cutoff, not a fabricated 0%.
+    // Voltage and charging status remain available, including while charging.
+    let bthome_service_data = if battery_mv <= MOISTURE_CUTOFF_MV {
+        &bthome_service_data[..8]
+    } else {
+        &bthome_service_data[..]
+    };
+    // The legacy advertisement is 28 of 31 bytes, or 26 without moisture.
 
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
     // ("legacy" just means we have the older 31 byte advertisment package)
@@ -75,7 +87,7 @@ async fn advertise_readings(
         // )
         .raw(
             ble::advertisement_builder::AdvertisementDataType::SERVICE_DATA_16,
-            &bthome_service_data,
+            bthome_service_data,
         )
         .full_name("Moisturemind")
         .build();
