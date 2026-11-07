@@ -15,6 +15,11 @@ Software Prerequisites
 * [Adafruit-nrfutil](https://github.com/adafruit/Adafruit_nRF52_nrfutil)
   * `pip3 install adafruit-nrfutil`
 * (optional) some tool for monitoring & writing the COM port
+* For WSL:
+  * On windows
+    * `usbipd` for passing through COM
+    * something to talk serial, e.g. Putty
+  * On linux `minicom` for talking to the device
 
 Flashing & Iterating
 --------------------
@@ -28,6 +33,12 @@ Easiest way to figure it out on Mac is to run `ls /dev/cu.*`
 
 If your SoftDevice setting is different you'll need to adjust the `sd-req` parameter as well, see below.
 
+For WSL:
+* pass through COM to WSL. From cmd/powershell:
+  * `usbipd list` to find the right BUSID
+  * `usbipd bind --busid 1-9`
+  * `usbipd attach --wsl --busid 1-9`
+* resetting (either from Windows or Linux) will require attaching again
 
 Connecting
 --------------------
