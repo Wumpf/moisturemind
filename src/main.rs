@@ -81,6 +81,14 @@ async fn main(spawner: Spawner) {
     config.gpiote_interrupt_priority = interrupt::Priority::P2;
     config.time_interrupt_priority = interrupt::Priority::P2;
     let peripherals = embassy_nrf::init(config);
+
+    // Low-side N-MOSFET gate: keep the sensor off before starting other services.
+    let sensor_power = embassy_nrf::gpio::Output::new(
+        peripherals.P0_03,
+        embassy_nrf::gpio::Level::Low,
+        embassy_nrf::gpio::OutputDrive::Standard,
+    );
+
     interrupt::typelevel::USBD::set_priority(interrupt::Priority::P2);
 
     let config = softdevice_config();
@@ -93,6 +101,7 @@ async fn main(spawner: Spawner) {
         &spawner,
         peripherals.SAADC,
         peripherals.P0_02,
+        sensor_power,
         peripherals.P0_14,
         peripherals.P0_17,
         peripherals.P0_31,

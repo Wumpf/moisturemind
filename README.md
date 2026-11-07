@@ -33,19 +33,27 @@ Connecting
 --------------------
 [Pinout of the Seeed Studio XIAO nRF52840](https://wiki.seeedstudio.com/XIAO_BLE/#hardware-overview)
 
-The [moisture detector](https://thepihut.com/products/capacitive-soil-moisture-sensor) I picked uses 3.3V, so we're using this directly off the MCU board.
-The output is an analog signal, so any of the ADC inputs should do - first pin is the P0.02, so I'm going with that.
+The [moisture detector](https://thepihut.com/products/capacitive-soil-moisture-sensor) uses the board's **3.3 V** supply, with its ground switched by an **IRLZ34NPbF N-channel MOSFET**`*`
+
+| Connection    | Wiring                                       |
+| ------------- | -------------------------------------------- |
+| Sensor VCC    | XIAO 3V3 (not 5 V)                            |
+| Sensor OUT    | P0.02 / D0 / A0                               |
+| Sensor GND    | MOSFET drain, **not directly to XIAO GND**     |
+| MOSFET source | XIAO GND                                     |
+| MOSFET gate   | P0.03 / D1 / A1 through a 1 kΩ series resistor |
+
+`*` Note that this N-channel mosfet might be a bad idea according to my LLM: 3.3 V gate performance isn't guaranteed, and switching ground may allow leakage through OUT.
 
 Current behavior
 --------------------
 * Samples moisture, battery voltage, and charging status every **5 minutes while charging**, or **20 minutes otherwise**.
+* P0.03 enables the sensor for a **500 ms warm-up** and the **11-sample batch** (~100 ms), then disables it before advertising and sleeping.
 * Charger status changes wake sampling via a GPIO interrupt (with a 100 ms debounce), triggering a fresh reading and BLE burst.
 * Reports moisture, battery voltage, and charging status to Home Assistant via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling.
 * Battery LED blends from **red (3.0 V)** to **green (4.2 V)**; blue before the first sample.
 
 TODO
 --------------------
-- [ ] Go to deep sleep between samplings.
-- [ ] Investigate whether we need to cut off power to the moisture sensor while not sampling.
 - [ ] Explore having two moisture sensors connected to the same device.
-- [ ] Longer sleep intervals
+- [ ] Even longer sleep intervals
