@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-COM_PORT=/dev/cu.usbmodem1101
+#COM_PORT=/dev/cu.usbmodem1101 # using this on MacOS
+COM_PORT=/dev/ttyACM0   # works on my WSL
 CRATE=moisturemind
 
 cargo build -p $CRATE --release
