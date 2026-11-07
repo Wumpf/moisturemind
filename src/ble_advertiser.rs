@@ -70,7 +70,7 @@ async fn advertise_readings(
     // The legacy advertisement is 28 of 31 bytes, or 26 without moisture.
 
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
-    // ("legacy" just means we have the older 31 byte advertisment package)
+    // ("legacy" just means we have the older 31 byte advertisement package)
     let advertisement_data = ble::advertisement_builder::LegacyAdvertisementBuilder::new()
         .flags(&[
             // TODO: Using `LimitedDiscovery` would make sense. Llm says we have to set a timeout for this!
@@ -80,7 +80,7 @@ async fn advertise_readings(
         ])
         // 16bit service IDs are used for standard services.
         // Our device doesn't fit any in particular, so we should set a 128bit custom service ID instead.
-        // However, it gets a bit hard to squeeze this into the 31 advertisment package
+        // However, it gets a bit hard to squeeze this into the 31 advertisement package
         // .services_128(
         //     ble::advertisement_builder::ServiceList::Complete,
         //     &[SERVICE_UUID],
