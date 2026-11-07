@@ -76,7 +76,7 @@ async fn main(spawner: Spawner) {
     // Per https://github.com/embassy-rs/nrf-softdevice/tree/nrf-softdevice-v0.1.0#interrupt-priority
     // Interrupt priorities 0, 1 and 4 are reserved by the Softdevice, so we have to use 2 or 3 for all interrupts.
     let mut config = embassy_nrf::config::Config::default();
-    //config.gpiote_interrupt_priority = embassy_nrf::interrupt::Priority::P2;
+    config.gpiote_interrupt_priority = interrupt::Priority::P2;
     config.time_interrupt_priority = interrupt::Priority::P2;
     let peripherals = embassy_nrf::init(config);
     interrupt::typelevel::USBD::set_priority(interrupt::Priority::P2);

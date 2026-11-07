@@ -38,8 +38,9 @@ The output is an analog signal, so any of the ADC inputs should do - first pin i
 
 Current behavior
 --------------------
-* Samples moisture, battery voltage, and charging status every **10 minutes**.
-* Reports moisture and battery voltage to Home Assistant via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling.
+* Samples moisture, battery voltage, and charging status every **5 minutes while charging**, or **20 minutes otherwise**.
+* Charger status changes wake sampling via a GPIO interrupt (with a 100 ms debounce), triggering a fresh reading and BLE burst.
+* Reports moisture, battery voltage, and charging status to Home Assistant via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling.
 * Battery LED blends from **red (3.0 V)** to **green (4.2 V)**; blue before the first sample.
 
 TODO

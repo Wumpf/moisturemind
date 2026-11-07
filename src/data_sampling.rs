@@ -9,8 +9,9 @@ use crate::{Irqs, battery_sampling, moisture_sampling};
 pub const NUM_ADC_SAMPLES: usize = 11;
 const SAMPLE_INTERVAL_MS: u64 = 10;
 
-/// Delay between completed sampling batches.
-const SAMPLING_INTERVAL_SECS: u64 = 10 * 60;
+/// Delay between completed sampling batches (each triggers an advertising burst).
+const CHARGING_INTERVAL_SECS: u64 = 5 * 60;
+const NOT_CHARGING_INTERVAL_SECS: u64 = 20 * 60;
 
 /// All readings from one completed sampling cycle.
 #[derive(Clone, Copy, Debug)]
@@ -29,7 +30,7 @@ pub static MEASUREMENTS: Watch<CriticalSectionRawMutex, Measurements, 2> = Watch
 #[embassy_executor::task]
 async fn sample_data(
     mut saadc: saadc::Saadc<'static, 2>,
-    battery: battery_sampling::BatterySampler,
+    mut battery: battery_sampling::BatterySampler,
 ) -> ! {
     // Allow the newly enabled battery divider to settle before the first read.
     embassy_time::Timer::after_millis(SAMPLE_INTERVAL_MS).await;
@@ -59,7 +60,18 @@ async fn sample_data(
             battery: battery_reading,
         });
 
-        embassy_time::Timer::after_secs(SAMPLING_INTERVAL_SECS).await;
+        let interval_secs = if battery_reading.charging {
+            CHARGING_INTERVAL_SECS
+        } else {
+            NOT_CHARGING_INTERVAL_SECS
+        };
+        // Wake for either the regular interval or a charger state change.
+        // A change triggers fresh measurements and an immediate advertising burst.
+        let _ = embassy_time::with_timeout(
+            embassy_time::Duration::from_secs(interval_secs),
+            battery.wait_for_charging_change(battery_reading.charging),
+        )
+        .await;
     }
 }
 
