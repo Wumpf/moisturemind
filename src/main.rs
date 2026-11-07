@@ -53,22 +53,9 @@ pub fn reset_into_dfu() -> ! {
 }
 
 #[embassy_executor::task]
-async fn softdevice_task(
-    sd: &'static Softdevice,
-    vbus: &'static embassy_nrf::usb::vbus_detect::SoftwareVbusDetect,
-) -> ! {
-    sd.run_with_callback(|event| {
-        use nrf_softdevice::SocEvent;
-
-        // Forward USB events.
-        match event {
-            SocEvent::PowerUsbDetected => vbus.detected(true),
-            SocEvent::PowerUsbRemoved => vbus.detected(false),
-            SocEvent::PowerUsbPowerReady => vbus.ready(),
-            _ => {}
-        }
-    })
-    .await
+async fn softdevice_task(sd: &'static Softdevice, usb_power: &'static usb::UsbPower) -> ! {
+    sd.run_with_callback(|event| usb_power.handle_event(event))
+        .await
 }
 
 #[embassy_executor::main]
@@ -78,7 +65,6 @@ async fn main(spawner: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
     // Use the board's 32.768 kHz crystal for RTC timers, matching SoftDevice below.
     config.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
-    config.gpiote_interrupt_priority = interrupt::Priority::P2;
     config.time_interrupt_priority = interrupt::Priority::P2;
     let peripherals = embassy_nrf::init(config);
 
@@ -108,8 +94,8 @@ async fn main(spawner: Spawner) {
     let config = softdevice_config();
     let sd = Softdevice::enable(&config);
 
-    let vbus = usb::setup_usb(&spawner, peripherals.USBD);
-    spawner.spawn(softdevice_task(sd, vbus).unwrap());
+    let usb_power = usb::setup_usb(&spawner, peripherals.USBD);
+    spawner.spawn(softdevice_task(sd, usb_power).unwrap());
 
     data_sampling::setup_data_sampling(
         &spawner,
@@ -119,6 +105,7 @@ async fn main(spawner: Spawner) {
         peripherals.P0_14,
         peripherals.P0_17,
         peripherals.P0_31,
+        usb_power,
     )
     .await;
 

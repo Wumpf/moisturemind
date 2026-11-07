@@ -39,6 +39,7 @@ For WSL:
   * `usbipd bind --busid 1-9`
   * `usbipd attach --wsl --busid 1-9`
 * resetting (either from Windows or Linux) will require attaching again
+  * I recommend resetting on Windows because resetting on Linux and then attaching booted the device for me sometimes.
 
 Connecting
 --------------------
@@ -58,12 +59,32 @@ The [moisture detector](https://thepihut.com/products/capacitive-soil-moisture-s
 
 Current behavior
 --------------------
-* Samples moisture, battery voltage, and charging status every **5 minutes while charging**, or **20 minutes otherwise**.
-* P0.03 enables the sensor for a **500 ms warm-up** and the **11-sample batch** (~100 ms), then disables it before advertising and sleeping.
-* Charger status changes wake sampling via a GPIO interrupt (with a 100 ms debounce), triggering a fresh reading and BLE burst.
-* Reports moisture, battery voltage, and charging status to Home Assistant via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling.
-* Omits moisture at **≤3.25 V battery voltage** (measured with the sensor on), where readings were observed to become strange. Battery/charging reports continue
-* Battery LED blends from **red (3.0 V)** to **green (4.2 V)**; blue before the first sample.
+### Sampling and wake-up
+
+* Samples every **5 minutes with USB power present**, or **20 minutes on battery**, regardless of charging status.
+* P0.03 enables the sensor for a short warmup, followed by a bunch of samples (of which we take the median), then disables it before advertising and sleeping.
+* USB plug/unplug triggers fresh readings and a BLE burst, even when the battery is not charging.
+* Charging status is read during each sample
+  * convenient since this way we can put everything on a single timer
+  * charging change happens rarely enough so no need to wakup
+
+### Home Assistant reporting
+
+Readings are sent via **[BTHome v2](https://bthome.io/format/)** in **2-second BLE bursts** after sampling:
+
+| Reading | Meaning |
+| --- | --- |
+| Moisture | Soil moisture percentage. |
+| Battery voltage | Voltage measured with the sensor powered on. |
+| Charging | Whether the charger is actively charging the battery. |
+| USB power | Whether USB power is present, independent of USB enumeration; uses BTHome's binary **power** object (`0x10`). |
+
+USB power on with charging off means **plugged in, not charging**—not necessarily full.
+
+### Low-battery behavior and LED
+
+* At **≤3.25 V**, moisture is omitted because readings were observed to become unreliable. Battery voltage, charging status, and USB power reports continue.
+* [turned off currently] Battery LED blends from **red (3.0 V)** to **green (4.2 V)**; blue before the first sample.
 
 TODO
 --------------------

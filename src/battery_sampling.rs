@@ -20,24 +20,6 @@ pub struct BatterySampler {
 }
 
 impl BatterySampler {
-    /// Sleep until charging differs from the last reported state.
-    /// Level waits also catch a change that happened before this future was armed.
-    pub async fn wait_for_charging_change(&mut self, was_charging: bool) {
-        loop {
-            if was_charging {
-                self.charge_status.wait_for_high().await;
-            } else {
-                self.charge_status.wait_for_low().await;
-            }
-
-            // Debounce: Reject brief status-line glitches before triggering another sample.
-            embassy_time::Timer::after_millis(100).await;
-            if self.charge_status.is_low() != was_charging {
-                return;
-            }
-        }
-    }
-
     /// Return median battery voltage and current charging status from the same cycle.
     pub fn process_samples(&self, samples: &mut [i16; NUM_ADC_SAMPLES]) -> BatteryReading {
         samples.sort_unstable();

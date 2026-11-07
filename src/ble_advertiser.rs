@@ -1,7 +1,7 @@
 use embassy_executor::Spawner;
 use nrf_softdevice::{Softdevice, ble};
 
-use crate::data_sampling::MEASUREMENTS;
+use crate::data_sampling::{MEASUREMENTS, Measurements};
 
 const ADVERTISING_DURATION_SECS: u16 = 2;
 
@@ -10,16 +10,12 @@ const ADVERTISING_DURATION_SECS: u16 = 2;
 const MOISTURE_CUTOFF_MV: u16 = 3250;
 
 const BTHOME_VOLTAGE_U16: u8 = 0x0C; // Millivolts (BTHome scales by 0.001 V).
+const BTHOME_POWER: u8 = 0x10; // Binary power presence, not watts.
 const BTHOME_BATTERY_CHARGING: u8 = 0x16;
 const BTHOME_MOISTURE_U8: u8 = 0x2F;
 
 #[expect(clippy::identity_op)]
-async fn advertise_readings(
-    sd: &'static Softdevice,
-    moisture: u8,
-    battery_mv: u16,
-    charging: bool,
-) {
+async fn advertise_readings(sd: &'static Softdevice, data: Measurements) {
     // Our custom service UUID `d805d254-01f2-42c2-ab6c-798366bf1a4d` in little endian.
     // Disabled, see below why.
     // const SERVICE_UUID: [u8; 16] = [
@@ -44,30 +40,36 @@ async fn advertise_readings(
     (0 << 2) + // Not a trigger based device.
     (2 << 5); // BTHome version 2.0
 
-    let voltage = battery_mv.to_le_bytes();
+    let voltage = data.battery.millivolts.to_le_bytes();
 
-    // BTHome objects are ordered by ID: voltage (0x0C), charging (0x16), moisture (0x2F).
+    // Package data for bthome.
     let bthome_service_data = [
         BTHOME_UUID[0],
         BTHOME_UUID[1],
         BTHOME_FLAGS,
+        // Voltage (under load) in millivolts.
         BTHOME_VOLTAGE_U16,
         voltage[0],
         voltage[1],
+        // USB power status (0 = not powered, 1 = powered).
+        BTHOME_POWER,
+        u8::from(data.usb_power),
+        // Battery charging status (0 = not charging, 1 = charging).
         BTHOME_BATTERY_CHARGING,
-        u8::from(charging), // 0 = not charging, 1 = charging.
+        u8::from(data.battery.charging),
+        // Moisture level as a percentage (0-100).
         BTHOME_MOISTURE_U8,
-        moisture,
+        data.moisture,
     ];
 
     // Omit the entire moisture object at/below the cutoff, not a fabricated 0%.
-    // Voltage and charging status remain available, including while charging.
-    let bthome_service_data = if battery_mv <= MOISTURE_CUTOFF_MV {
-        &bthome_service_data[..8]
+    // Voltage, USB power and charging status remain available.
+    let bthome_service_data = if data.battery.millivolts <= MOISTURE_CUTOFF_MV {
+        &bthome_service_data[..10]
     } else {
         &bthome_service_data[..]
     };
-    // The legacy advertisement is 28 of 31 bytes, or 26 without moisture.
+    // The legacy advertisement is 30 of 31 bytes, or 28 without moisture.
 
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
     // ("legacy" just means we have the older 31 byte advertisement package)
@@ -111,13 +113,7 @@ async fn advertise_readings_task(sd: &'static Softdevice) -> ! {
     loop {
         // No advertising before the first sample or between measurement bursts.
         let data = receiver.changed().await;
-        advertise_readings(
-            sd,
-            data.moisture,
-            data.battery.millivolts,
-            data.battery.charging,
-        )
-        .await;
+        advertise_readings(sd, data).await;
     }
 }
 
