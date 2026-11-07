@@ -6,12 +6,16 @@ use crate::data_sampling::MEASUREMENTS;
 const ADVERTISING_DURATION_SECS: u16 = 2;
 
 const BTHOME_VOLTAGE_U16: u8 = 0x0C; // Millivolts (BTHome scales by 0.001 V).
+const BTHOME_BATTERY_CHARGING: u8 = 0x16;
 const BTHOME_MOISTURE_U8: u8 = 0x2F;
-const BTHOME_MOISTURE_U16: u8 = 0x14;
-const BTHOME_COUNT_I16: u8 = 0x5A;
 
 #[expect(clippy::identity_op)]
-async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u16) {
+async fn advertise_readings(
+    sd: &'static Softdevice,
+    moisture: u8,
+    battery_mv: u16,
+    charging: bool,
+) {
     // Our custom service UUID `d805d254-01f2-42c2-ab6c-798366bf1a4d` in little endian.
     // Disabled, see below why.
     // const SERVICE_UUID: [u8; 16] = [
@@ -38,7 +42,7 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
 
     let voltage = battery_mv.to_le_bytes();
 
-    // BTHome objects are ordered by ID: voltage (0x0C), then moisture (0x2F).
+    // BTHome objects are ordered by ID: voltage (0x0C), charging (0x16), moisture (0x2F).
     let bthome_service_data = [
         BTHOME_UUID[0],
         BTHOME_UUID[1],
@@ -46,10 +50,12 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
         BTHOME_VOLTAGE_U16,
         voltage[0],
         voltage[1],
+        BTHOME_BATTERY_CHARGING,
+        u8::from(charging), // 0 = not charging, 1 = charging.
         BTHOME_MOISTURE_U8,
         moisture,
     ];
-    // The complete legacy advertisement is 30 of 31 bytes.
+    // Without the optional appearance field, the legacy advertisement is 28 of 31 bytes.
 
     // I tried using extended advertisng (part of BLE5). But neither the scanner on my phone nor HA's scanner could see the device anymore.
     // ("legacy" just means we have the older 31 byte advertisment package)
@@ -67,11 +73,6 @@ async fn advertise_readings(sd: &'static Softdevice, moisture: u8, battery_mv: u
         //     ble::advertisement_builder::ServiceList::Complete,
         //     &[SERVICE_UUID],
         // )
-        .raw(
-            // Let's be nice and set an appearance value.
-            ble::advertisement_builder::AdvertisementDataType::APPEARANCE,
-            &0x0540_u16.to_le_bytes(), // Appearance flag for Generic Sensor (see https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf)
-        )
         .raw(
             ble::advertisement_builder::AdvertisementDataType::SERVICE_DATA_16,
             &bthome_service_data,
@@ -98,7 +99,13 @@ async fn advertise_readings_task(sd: &'static Softdevice) -> ! {
     loop {
         // No advertising before the first sample or between measurement bursts.
         let data = receiver.changed().await;
-        advertise_readings(sd, data.moisture, data.battery.millivolts).await;
+        advertise_readings(
+            sd,
+            data.moisture,
+            data.battery.millivolts,
+            data.battery.charging,
+        )
+        .await;
     }
 }
 
