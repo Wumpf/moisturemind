@@ -76,6 +76,8 @@ async fn main(spawner: Spawner) {
     // Per https://github.com/embassy-rs/nrf-softdevice/tree/nrf-softdevice-v0.1.0#interrupt-priority
     // Interrupt priorities 0, 1 and 4 are reserved by the Softdevice, so we have to use 2 or 3 for all interrupts.
     let mut config = embassy_nrf::config::Config::default();
+    // Use the board's 32.768 kHz crystal for RTC timers, matching SoftDevice below.
+    config.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
     config.gpiote_interrupt_priority = interrupt::Priority::P2;
     config.time_interrupt_priority = interrupt::Priority::P2;
     let peripherals = embassy_nrf::init(config);
@@ -116,11 +118,20 @@ fn softdevice_config() -> nrf_softdevice::Config {
     const NAME: &[u8] = b"Moisturemind";
 
     nrf_softdevice::Config {
-        // What clock the softdevice should use.
+        // Use the XIAO's external 32.768 kHz crystal (X1), matching Embassy's LFCLK.
+        //
+        // Unlike the internal resistor-capacitor (RC) oscillator, it needs no periodic
+        // calibration against the high-frequency crystal, avoiding clock-startup and
+        // calibration power overhead between our infrequent advertising bursts.
+        // Schematic: https://files.seeedstudio.com/wiki/XIAO-BLE/Seeed_Studio_XIAO_nRF52840_PDF.pdf
         clock: Some(raw::nrf_clock_lf_cfg_t {
-            source: raw::NRF_CLOCK_LF_SRC_RC as u8, // TODO: switch to external? NRF_CLOCK_LF_SRC_XTAL?
-            rc_ctiv: 16,
-            rc_temp_ctiv: 2,
+            source: raw::NRF_CLOCK_LF_SRC_XTAL as u8,
+            rc_ctiv: 0,
+            rc_temp_ctiv: 0,
+            // Conservative bound: Seeed's published v1.1 schematic/KiCad files give
+            // X1's frequency/package, but not its part number or tolerance. Tighten only
+            // after verifying total error including temperature, aging and loading.
+            // This declares accuracy; it does not tune the crystal.
             accuracy: raw::NRF_CLOCK_LF_ACCURACY_500_PPM as u8,
         }),
 
