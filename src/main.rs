@@ -89,6 +89,20 @@ async fn main(spawner: Spawner) {
         embassy_nrf::gpio::OutputDrive::Standard,
     );
 
+    // XIAO nRF52840: P0.13 LOW selects ~100 mA charging (floating selects ~50 mA).
+    // See https://wiki.seeedstudio.com/XIAO_BLE/#battery-charging-current
+    //
+    // The [1500 mAh LiPo I'm using](https://www.electrokit.com/batteri-lipo-3.7v-1500mah)
+    // right now specifies 300 mA standard charging current, so this is still quaint.
+    let charge_current_select = embassy_nrf::gpio::Output::new(
+        peripherals.P0_13,
+        embassy_nrf::gpio::Level::Low,
+        embassy_nrf::gpio::OutputDrive::Standard,
+    );
+    // Keep the pin driven even after this startup task returns.
+    // Dropping Output would otherwise disconnect it and revert the charger to its lower-current setting!
+    core::mem::forget(charge_current_select);
+
     interrupt::typelevel::USBD::set_priority(interrupt::Priority::P2);
 
     let config = softdevice_config();
