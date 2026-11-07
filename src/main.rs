@@ -16,6 +16,8 @@ use embassy_nrf::{
 };
 use nrf_softdevice::Softdevice;
 
+const ENABLE_BATTERY_LED: bool = false;
+
 bind_interrupts!(
     pub struct Irqs {
         USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
@@ -95,13 +97,15 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    battery_led::setup_battery_led(
-        &spawner,
-        peripherals.PWM0,
-        peripherals.P0_26,
-        peripherals.P0_30,
-        peripherals.P0_06,
-    );
+    if ENABLE_BATTERY_LED {
+        battery_led::setup_battery_led(
+            &spawner,
+            peripherals.PWM0,
+            peripherals.P0_26,
+            peripherals.P0_30,
+            peripherals.P0_06,
+        );
+    }
 
     ble_advertiser::setup_ble_advertising(spawner, sd).await;
 }
@@ -131,7 +135,7 @@ fn softdevice_config() -> nrf_softdevice::Config {
 
         // Configure GAP (Generic Access Profile) device name.
         gap_device_name: Some(raw::ble_gap_cfg_device_name_t {
-            p_value: NAME.as_ptr() as *const u8 as _,
+            p_value: NAME.as_ptr() as _,
             current_len: NAME.len() as _,
             max_len: NAME.len() as _,
             write_perm: unsafe { core::mem::zeroed() }, // Not writable.
